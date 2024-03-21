@@ -1,0 +1,520 @@
+---
+title: "Adams_Lab2"
+author: "Annie"
+date: "2024-01-23"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+
+
+```{r setup, include=FALSE}
+library("tidymodels")
+library("tidyverse")
+library("dplyr")
+library("janitor")
+library("corrplot")
+dat <- read_csv(file = "https://raw.githubusercontent.com/MaRo406/eds-232-machine-learning/main/data/pumpkin-data.csv")
+```
+
+
+
+```{r include = FALSE}
+glimpse(dat)
+```
+
+```{r, include=FALSE}
+
+# Clean names to the snake_case convention
+
+pumpkins <- dat %>% clean_names(case = "snake")
+
+# Return column names
+
+pumpkins %>% names()
+```
+
+
+
+```{r, include=FALSE}
+pumpkins <- pumpkins %>% select(variety, city_name, package, low_price, high_price, date)
+
+
+## Print data set
+pumpkins %>% slice_head(n = 5)
+```
+
+```{r,include=FALSE}
+
+## Load lubridate
+
+library(lubridate)
+
+# Extract the month and day from the dates and add as new columns
+pumpkins <- pumpkins %>%
+  mutate(date = mdy(date),  
+         day = yday(date),
+         month = month(date))
+pumpkins %>% 
+  select(-day)
+
+
+## View the first few rows
+
+pumpkins %>% slice_head(n = 7)
+```
+
+
+```{r,include=FALSE}
+# Create a new column price
+pumpkins <- pumpkins %>% 
+  mutate(price = (low_price+ high_price)/2)
+```
+
+
+
+```{r,include=FALSE}
+
+# Make a scatter plot of price and day
+pumpkins %>% ggplot(aes(x = day, y = price)) +  
+  geom_point(color = "orange")+
+  labs(x = "Day of Year", y = "Average Price (US Dollar)", title = "Average Price of Pumpkins across year")+
+  theme_minimal()
+```
+
+
+```{r, include=FALSE}
+# Verify the distinct observations in Package column
+pumpkins %>% 
+  distinct(package)
+```
+
+
+```{r, include=FALSE}
+## View the first few rows of the data
+
+pumpkins %>% slice_head(n = 5)
+
+pumpkins %>% distinct(package)
+```
+
+
+```{r, include=FALSE}
+# Retain only pumpkins with "bushel" in the package column
+new_pumpkins <- pumpkins %>% dplyr:: filter(stringr::str_detect(package, "bushel"))
+
+#check to make package column only contains bushel now 
+# Verify the distinct observations in Package column
+new_pumpkins %>% 
+  distinct(package)
+```
+
+```{r, include=FALSE}
+# Get the dimensions of the new data
+dim(new_pumpkins)
+
+# View a few rows of the new data
+new_pumpkins %>% 
+  slice_head(n = 10)
+```
+
+```{r, include=FALSE}
+# Convert the price if the Package contains fractional bushel values
+new_pumpkins <- new_pumpkins %>% 
+  mutate(price = case_when(
+    str_detect(package, "1 1/9") ~ price/(1.1),
+    str_detect(package, "1/2") ~ price*2,
+    TRUE ~ price))
+
+# View the first few rows of the data
+new_pumpkins %>% 
+  slice_head(n = 30)
+```
+
+
+```{r, include=FALSE}
+
+# Set theme
+theme_set(theme_light())
+
+# Make a scatter plot of day and price
+new_pumpkins %>% 
+  ggplot(mapping = aes(x = day, y = price)) +
+  geom_point(size = 1.6)
+```
+
+
+```{r, include=FALSE}
+# Find the average price of pumpkins per month then plot a bar chart
+pumpkins %>%
+  group_by(month) %>% 
+  summarise(mean_price = mean(price)) %>% 
+  ggplot(aes(x = month, y = mean_price)) +
+  geom_col(fill = "midnightblue", alpha = 0.7) +
+  ylab("Pumpkin Price")
+```
+
+
+
+```{r, include=FALSE}
+# Specify a recipe
+pumpkins_recipe <- recipe(price ~ ., data = new_pumpkins) %>% 
+  step_integer(all_predictors(), zero_based = TRUE)
+
+
+# Print out the recipe
+pumpkins_recipe
+```
+
+
+```{r, include=FALSE}
+# Prep the recipe
+pumpkins_prep <- prep(pumpkins_recipe)
+
+# Bake the recipe to extract a preprocessed new_pumpkins data
+baked_pumpkins <- bake(pumpkins_prep, new_data = NULL)
+
+# Print out the baked data set
+baked_pumpkins %>% 
+  slice_head(n = 10)
+```
+
+
+```{r, include=FALSE}
+# Find the correlation between the package and the price
+cor(baked_pumpkins$package, baked_pumpkins$price)
+```
+
+
+```{r, include=FALSE}
+#Correlation between price and other vars.
+
+
+#Correlation between price and day
+print(paste0( "The correolation between price and day of year is ", round(cor(baked_pumpkins$day, baked_pumpkins$price),3)))
+
+#Correlation between price and City name
+print(paste0("The correlation between price and city is ", round(cor(baked_pumpkins$city_name, baked_pumpkins$price),3)))
+
+```
+
+
+
+```{r, include=FALSE}
+# Load the corrplot package
+library(corrplot)
+
+# Obtain correlation matrix
+corr_mat <- cor(baked_pumpkins %>% 
+                  # Drop columns that are not really informative
+                  select(-c(low_price, high_price)))
+
+# Make a correlation plot between the variables
+corrplot(corr_mat, method = "shade", shade.col = NA, tl.col = "black", tl.srt = 45, addCoef.col = "black", cl.pos = "n", order = "original")
+
+```
+
+
+```{r, include = FALSE}
+set.seed(123)
+# Split the data into training and test sets
+pumpkins_split <- new_pumpkins %>% 
+  initial_split(prop = 0.8)
+
+
+# Extract training and test data
+pumpkins_train <- training(pumpkins_split)
+pumpkins_test <- testing(pumpkins_split)
+
+
+# Create a recipe for preprocessing the data
+lm_pumpkins_recipe <- recipe(price ~ package, data = pumpkins_train) %>% 
+  step_integer(all_predictors(), zero_based = TRUE)
+
+
+# Create a linear model specification
+lm_spec <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+```
+
+
+```{r include = FALSE}
+# Hold modeling components in a workflow
+lm_wf <- workflow() %>% 
+  add_recipe(lm_pumpkins_recipe) %>% 
+  add_model(lm_spec)
+
+# Print out the workflow
+lm_wf
+```
+
+
+```{r include = FALSE}
+# Train the model
+lm_wf_fit <- lm_wf %>% 
+  fit(data = pumpkins_train)
+
+# Print the model coefficients learned 
+lm_wf_fit
+```
+
+
+
+```{r prediction_test, include = FALSE}
+# Make predictions for the test set
+predictions <- lm_wf_fit %>% 
+  predict(new_data = pumpkins_test)
+
+
+# Bind predictions to the test set
+lm_results <- pumpkins_test %>% 
+  select(c(package, price)) %>% 
+  bind_cols(predictions)
+
+
+# Print the first ten rows of the tibble
+lm_results %>% 
+  slice_head(n = 10)
+```
+
+
+
+```{r evaluate_lr, include = FALSE}
+# Evaluate performance of linear regression
+metrics(data = lm_results,
+        truth = price,
+        estimate = .pred)
+```
+
+
+
+```{r encode_package, include = FALSE}
+# Encode package column
+package_encode <- lm_pumpkins_recipe %>% 
+  prep() %>% 
+  bake(new_data = pumpkins_test) %>% 
+  select(package)
+
+
+# Bind encoded package column to the results
+ plot_results <- lm_results %>%
+ bind_cols(package_encode %>%
+               rename(package_integer = package)) %>%
+  relocate(package_integer, .after = package)
+
+# Print new results data frame
+plot_results %>%
+  slice_head(n = 5)
+
+# Make a scatter plot
+plot_results %>%
+  ggplot(mapping = aes(x = package_integer, y = price)) +
+   geom_point(size = 1.6) +
+   # Overlay a line of best fit
+   geom_line(aes(y = .pred), color = "orange", linewidth = 1.2) +
+   xlab("package")
+```
+
+
+
+
+
+
+
+
+Today we will be continuing the pumpkin case study from last week. We will be using the data that you cleaned and split last time (pumpkins_train) and will be comparing our results today to those you have already obtained. Open and run your Lab 1.Rmd as a first step so those objects are available in your Environment.
+
+Once you have done that, we'll start today's lab by specifying a recipe for a polynomial model.  First we specify a recipe that identifies our variables and data, converts the package variable to a numerical form, and then adds a polynomial effect with step_poly()
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+
+# Specify a recipe
+poly_pumpkins_recipe <-
+  recipe(price ~ package, data = pumpkins_train) %>%
+  step_integer(all_predictors(), zero_based = TRUE) %>% 
+  step_poly(all_predictors(), degree = 4)
+```
+
+How did that work? Later we will learn about model tuning that will let us do things like find the optimal value for degree.  For now, we'd like to have a flexible model, so we'll use a relatively large value.
+
+Polynomial regression is still linear regression, so our model specification looks similar to before.
+
+```{r}
+# Create a model specification called poly_spec
+poly_spec <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+```
+Question 1: Now take the recipe and model specification that just created and bundle them into a workflow called poly_df.
+
+```{r}
+# Bundle recipe and model spec into a workflow
+poly_wf <- workflow() %>% 
+  add_recipe(poly_pumpkins_recipe) %>% 
+  add_model(poly_spec)
+```
+
+Question 2: fit a model to the pumpkins_train data using your workflow and assign it to poly_wf_fit
+```{r}
+# Create a model
+poly_wf_fit <- poly_wf %>% 
+  fit(data = pumpkins_train)
+```
+
+```{r}
+# Print learned model coefficients
+poly_wf_fit
+```
+
+
+```{r}
+# Make price predictions on test data
+poly_results <- poly_wf_fit %>% predict(new_data = pumpkins_test) %>% 
+  bind_cols(pumpkins_test %>% select(c(package, price))) %>% 
+  relocate(.pred, .after = last_col())
+
+# Print the results
+poly_results %>% 
+  slice_head(n = 10)
+```
+
+Now let's evaluate how the model performed on the test_set using yardstick::metrics().
+```{r}
+metrics(data = poly_results, truth = price, estimate = .pred)
+```
+Question 3: How do the performance metrics differ between the linear model from last week and the polynomial model we fit today?  Which model performs better on predicting the price of different packages of pumpkins?
+
+
+**Our rmse for the polynomial model is quite a bit smaller than the linear model's rmse. The linear model had an rmse of 7.23, while this model has an rmse of 3.27. The $R^2$ for the polynomial model is .89, while the $R^2$ for the linear model is .49. This means that the predictor in the polynomial model explains 89% of the variance for pumpkin price, while the same predictor in our linear model is only explaining 49% of the variance for pumpkin price. The mean absolute error for the polynomial model is also significantly smaller. The polynomial model performs better on predicting the price of different packages of pumpkins.** 
+
+
+
+
+Let's visualize our model results.  First prep the results by binding the encoded package variable to them.
+```{r}
+# Bind encoded package column to the results
+poly_results <- poly_results %>% 
+  bind_cols(package_encode %>% 
+              rename(package_integer = package)) %>% 
+  relocate(package_integer, .after = package)
+
+
+# Print new results data frame
+poly_results %>% 
+  slice_head(n = 5)
+```
+
+OK, now let's take a look! 
+
+Question 4: Create a scatter plot that takes the poly_results and plots package vs. price.  Then draw a line showing our model's predicted values (.pred). Hint: you'll need separate geoms for the data points and the prediction line.
+```{r}
+# Make a scatter plot
+poly_results %>% ggplot(aes(x = package_integer, y = price)) +  
+  geom_point(color = "orange")+
+  labs(x = "Package", y = "Average Price (US Dollar)", title = "Average Price of Pumpkins based on package")+
+  geom_line( aes(y = .pred))+
+  theme_minimal()
+
+```
+
+You can see that a curved line fits your data much better.
+
+Question 5: Now make a smoother line by using geom_smooth instead of geom_line and passing it a polynomial formula like this:
+geom_smooth(method = lm, formula = y ~ poly(x, degree = 3), color = "midnightblue", size = 1.2, se = FALSE)
+
+```{r warning = FALSE}
+# Make a smoother scatter plot 
+poly_results %>%ggplot(aes(x = package_integer, y = price)) +
+  geom_point(color = "orange") +
+  labs(x = "Package", y = "Average Price (US Dollar)", title = "Average Price of Pumpkins based on package")+
+  geom_smooth(method = lm, formula = y ~ poly(x, degree = 3), color = "midnightblue", size = 1.2, se = FALSE)+
+  theme_minimal()
+
+```
+
+OK, now it's your turn to go through the process one more time.
+ 
+Additional assignment components :
+6. Choose a new predictor variable (anything not involving package type) in this dataset.
+7. Determine its correlation with the outcome variable (price).  (Remember we calculated a correlation matrix last week)
+8. Create and test a model for your new predictor:
+  - Create a recipe
+  - Build a model specification (linear or polynomial)
+  - Bundle the recipe and model specification into a workflow
+  - Create a model by fitting the workflow
+  - Evaluate model performance on the test data
+  - Create a visualization of model performance
+  
+```{r}
+# Specify a recipe
+poly_pumpkins_recipe2 <-
+  recipe(price ~ variety, data = pumpkins_train) %>%
+  step_integer(all_predictors(), zero_based = TRUE) 
+
+# Create a model specification called poly_spec
+poly_spec2 <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+
+
+
+# Bundle recipe and model spec into a workflow
+poly_wf2 <- workflow() %>% 
+  add_recipe(poly_pumpkins_recipe2) %>% 
+  add_model(poly_spec2)
+
+# Create a model
+poly_wf_fit2 <- poly_wf2 %>% 
+  fit(data = pumpkins_train)
+
+
+# Make price predictions on test data
+poly_results2 <- poly_wf_fit2 %>% predict(new_data = pumpkins_test) %>% 
+  bind_cols(pumpkins_test %>% select(c(variety, price))) %>% 
+  relocate(.pred, .after = last_col())
+
+
+
+
+#evaluate model performance
+metrics(data = poly_results2, truth = price, estimate = .pred)
+
+variety_encode <- poly_pumpkins_recipe2 %>% 
+  prep() %>% 
+  bake(new_data = pumpkins_test) %>% 
+  select(variety)
+
+# Binding encoded package column to the results
+poly_results2 <- poly_results2 %>% 
+  bind_cols(variety_encode %>% 
+              rename(variety_integer = variety)) %>% 
+  relocate(variety_integer, .after = variety)
+
+
+# Make a smoother scatter plot 
+poly_results2 %>%ggplot(aes(x = variety_integer, y = price)) +
+  geom_point(color = "orange") +
+  labs(x = "Variety", y = "Average Price (US Dollar)", title = "Average Price of Pumpkins based on variety")+
+   geom_smooth(method = lm, formula = y ~ poly(x, degree = 2), color = "midnightblue", size = 1.2, se = FALSE)+
+  theme_minimal()
+
+```
+
+
+
+Lab 2 due 1/24 at 11:59 PM

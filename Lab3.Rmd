@@ -1,0 +1,149 @@
+---
+title: "Adams_Lab3"
+author: "Annie Adams"
+date: 2023-01-25
+output: 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rsample)
+library(glmnet)
+set.seed(11)
+```
+
+## Lab 3: Predicting the age of abalone
+
+Abalones are marine snails. Their flesh is widely considered to be a desirable food, and is consumed raw or cooked by a variety of cultures. The age of abalone is determined by cutting the shell through the cone, staining it, and counting the number of rings through a microscope -- a boring and time-consuming task. Other measurements, which are easier to obtain, are used to predict the age.
+
+The data set provided includes variables related to the sex, physical dimensions of the shell, and various weight measurements, along with the number of rings in the shell. Number of rings is the stand-in here for age.
+
+### Data Exploration
+
+Pull the abalone data from Github and take a look at it.
+
+```{r data}
+#load in abalone data from github
+abdat<- read_csv(file = "https://raw.githubusercontent.com/MaRo406/eds-232-machine-learning/main/data/abalone-data.csv")
+
+#preview data 
+glimpse(abdat)
+
+```
+
+### Data Splitting
+
+-   ***Question 1***. Split the data into training and test sets. Use a 70/30 training/test split.
+
+We'll follow our text book's lead and use the caret package in our approach to this task. We will use the glmnet package in order to perform ridge regression and the lasso. The main function in this package is glmnet(), which can be used to fit ridge regression models, lasso models, and more. In particular, we must pass in an x matrix of predictors as well as a y outcome vector , and we do not use the y∼x syntax.
+```{r}
+
+#split data into 70% training, 30% testing 
+abdat_split <- abdat%>% 
+  initial_split(prop = 0.7)
+
+#assign training data
+abdat_train <-  training(abdat_split)
+
+#assign testing data
+abdat_test  <- testing(abdat_split)
+```
+
+
+### Fit a ridge regression model
+
+-   ***Question 2***. Use the model.matrix() function to create a predictor matrix, x, and assign the Rings variable to an outcome vector, y.
+
+```{r}
+#Create training feature matrices using model.matrix() (auto encoding of categorical variables)
+X <- model.matrix(Rings~ ., data =abdat_train)[,-1] 
+
+# transform y with log() transformation
+Y <- log(abdat_train$Rings) 
+```
+
+
+-   ***Question 3***. Fit a ridge model (controlled by the alpha parameter) using the glmnet() function. Make a plot showing how the estimated coefficients change with lambda. (Hint: You can call plot() directly on the glmnet() objects).
+
+### Using *k*-fold cross validation resampling and tuning our models
+
+```{r}
+#fit a ridge model, passing X,Y,alpha to glmnet()
+ridge <- glmnet(
+  x = X, #predictor variable
+  y = Y ,#outcome variable
+  alpha = 0, # ridge = 0, lasso = 1
+) 
+
+#plot() the glmnet model object
+plot(ridge, xvar = "lambda")  
+```
+
+
+In lecture we learned about two methods of estimating our model's generalization error by resampling, cross validation and bootstrapping. We'll use the *k*-fold cross validation method in this lab. Recall that lambda is a tuning parameter that helps keep our model from over-fitting to the training data. Tuning is the process of finding the optima value of lamba.
+
+-   ***Question 4***. This time fit a ridge regression model and a lasso model, both with using cross validation. The glmnet package kindly provides a cv.glmnet() function to do this (similar to the glmnet() function that we just used). Use the alpha argument to control which type of model you are running. Plot the results.
+```{r}
+# Apply CV ridge regression to abalone data 
+ridge <- cv.glmnet(
+  x = X,#predictor matrix
+  y = Y, #rings
+  alpha = 0
+)
+
+# Apply CV lasso regression to abalone data
+lasso <-  cv.glmnet(
+  x = X,#predictor matrix
+  y = Y, #rings
+  alpha = 1
+)
+ 
+
+# plot results
+par(mfrow = c(1, 2))
+plot(ridge, main = "Ridge penalty\n\n")
+plot(lasso, main = "Lasso penalty\n\n")
+```
+
+
+-   ***Question 5***. Interpret the graphs. What is being displayed on the axes here? How does the performance of the models change with the value of lambda?
+
+**The graphs above represents the 10 fold ( the defualt k in the `glmnet::cv.glmnet()`) cross validation MSE across all the $\lambda$ values. $\lambda$ , on the x axixs, is our tuning parameter that helps to control our model from overfitting the training data.MSE, our mean squared error, is on the y axis. As we increase the penalty, our mean squared error starts to also increase. The increase in MSE as the penalty increases tell us that a regular OLS model likely overfits the training data. The numbers on the top of the graph refers to the features of the model. We can see that the number of features in the lasso maodel decrease as penalty increases. Ridge regression does not force any variables to exactly zero so all features will remain in the model. The first dotted vertical line represents the $\lambda$ with the smallest MSE. The second dotted vertical lines represents the $\lambda$ with an MSE within one standard deviation of the minimum MSE.**
+
+-   ***Question 6***. Inspect the ridge model object you created with cv.glmnet(). The \$cvm column shows the MSEs for each CV fold. What is the minimum MSE? What is the value of lambda associated with this MSE minimum?
+
+```{r}
+# minimum MSE
+min(ridge$cvm)
+
+# lambda for minimum MSE
+ridge$lambda.min
+
+```
+
+**The minimum MSE for the ridge model is .04. The lambda for this minimum MSE is .022.**
+
+-   ***Question 7***. Do the same for the lasso model. What is the minimum MSE? What is the value of lambda associated with this MSE minimum?
+
+Data scientists often use the "one-standard-error" rule when tuning lambda to select the best model. This rule tells us to pick the most parsimonious model (fewest number of predictors) while still remaining within one standard error of the overall minimum cross validation error. The cv.glmnet() model object has a column that automatically finds the value of lambda associated with the model that produces an MSE that is one standard error from the MSE minimum (\$lambda.1se).
+
+```{r}
+min(lasso$cvm)
+lasso$lambda.min
+```
+
+
+**The minimum MSE for the lasso model is .04. The lambda for this minimum MSE is .00009**
+
+
+-   ***Question 8.*** Find the number of predictors associated with this model (hint: the \$nzero is the \# of predictors column).
+```{r}
+lasso$nzero[lasso$lambda == lasso$lambda.1se]
+
+```
+**There are 7 predictors associated with this model. **
+
+-   ***Question 9*****.** Which regularized regression worked better for this task, ridge or lasso? Explain your answer.
+
+**Both ridge and lasso penalties provide similar MSEs; however, these plots illustrate that ridge is still using all 10 features whereas the lasso model can get a similar MSE while reducing the feature set. Although this lasso model does not offer significant improvement over the ridge model, we get approximately the same accuracy by using only 7 features. Because of this, I would use the lasso model.** 

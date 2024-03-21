@@ -1,0 +1,431 @@
+---
+title: "Lab5"
+author: "Annie Adams"
+date: "2023-02-07"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+This week's lab is a musical lab. You'll be requesting data from the Spotify API and using it to build k-nearest neighbor and decision tree models.
+
+In order to use the Spotify API you must have a Spotify account. If you don't have one, sign up for a free one here: <https://www.spotify.com/us/signup>
+
+Once you have an account, go to Spotify for developers (<https://developer.spotify.com/>) and log in. Click the green "Create a Client ID" button to fill out the form to create an app create an app so you can access the API.
+
+On your developer dashboard page, click on the new app you just created. Go to Settings -\> Basic Information and you will find your Client ID . Click "View client secret" to access your secondary Client ID. Scroll down to Redirect URIs and enter: <http://localhost:1410/>
+
+You have two options for completing this lab.
+
+**Option 1**: **Classify by users**. Build models that predict whether a given song will be in your collection vs. a partner in class. This requires that you were already a Spotify user so you have enough data to work with. You will download your data from the Spotify API and then exchange with another member of class.
+
+**Option 2**: **Classify by genres**. Build models that predict which genre a song belongs to. This will use a pre-existing Spotify dataset available from Kaggle.com (<https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify>)
+
+```{r include = FALSE}
+library(spotifyr) #API interaction
+library(tidyverse)
+library(tidymodels)
+library(caret)
+library(vip)
+library(parsnip)
+library(baguette)
+library(randomForest)
+library(kableExtra)
+```
+
+Client ID and Client Secret are required to create and access token that is required to interact with the API. You can set them as system values so we don't have to do provide them each time.
+
+```{r access_API}
+
+Sys.setenv(SPOTIFY_CLIENT_ID = '2a73de1333ac42db8c53900c9607907c') 
+Sys.setenv(SPOTIFY_CLIENT_SECRET = '4c8a1683f277481f917c75ebf5993bf2')
+
+authorization_code <- get_spotify_authorization_code(scope = scopes()[c(1:19)]) #sets an authorization code that you'll need to provide for certain get_ functions via my_tracks <- get_my_saved_tracks(authorization = authorization_code)
+
+access_token <- get_spotify_access_token() #takes ID and SECRET, sends to Spotify and receives an access token
+```
+
+**Option 1: Data Preparation**
+
+You can use get_my_saved_tracks() to request all your liked tracks. It would be good if you had at least 150-200 liked tracks so the model has enough data to work with. If you don't have enough liked tracks, you can instead use get_my_recently_played(), and in that case grab at least 500 recently played tracks if you can.
+
+The Spotify API returns a dataframe of tracks and associated attributes. However, it will only return up to 50 (or 20) tracks at a time, so you will have to make multiple requests. Use a function to combine all your requests in one call.
+
+```{r message=FALSE}
+saved1 <- get_my_saved_tracks(limit = 50,  authorization = authorization_code)
+saved2 <- get_my_saved_tracks(limit = 50, offset = 50, authorization = authorization_code)
+
+spotify_liked<- rbind(saved1,saved2)
+
+audio_tracks <- get_track_audio_features(ids = spotify_liked$track.id, authorization = access_token)
+audio_tracks$track_names <- spotify_liked$track.name
+audio_tracks$who <- "Annie"
+
+write.csv(audio_tracks, here::here("data_spotify/audio_tracks.csv"))
+combined_spotify_data <- read_csv(here::here("data_spotify", "combined_data.csv"))
+combined_spotify_data <- combined_spotify_data[c(-1, -13,-14, -15, -16, -17, -20,-21, -22)]
+combined_spotify_data$outcome <- as.factor(combined_spotify_data$outcome)
+
+```
+
+
+Once you have your tracks, familiarize yourself with this initial dataframe. You'll need to request some additional information for the analysis. If you give the API a list of track IDs using get_track_audio_features(), it will return an audio features dataframe of all the tracks and some attributes of them.
+
+These track audio features are the predictors we are interested in, but this dataframe doesn't have the actual names of the tracks. Append the 'track.name' column from your favorite tracks database.
+
+Find a class mate whose data you would like to use. Add your partner's data to your dataset. Create a new column that will contain the outcome variable that you will try to predict. This variable should contain two values that represent if the track came from your data set or your partner's.
+
+**Option 2: Data preparation**
+
+Download the Spotify dataset from <https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify>
+
+Inspect the data. Choose two genres you'd like to use for the classification task. Filter down the data to include only the tracks of that genre.
+
+###Data Exploration (both options)
+
+Let's take a look at your data. Do some exploratory summary stats and visualization.
+
+For example: What are the most danceable tracks in your dataset? What are some differences in the data between users (Option 1) or genres (Option 2)?
+
+### **Modeling**
+
+Create competing models that predict whether a track belongs to:
+
+Option 1. you or your partner's collection
+
+Option 2. genre 1 or genre 2
+
+You will eventually create four final candidate models:
+
+1.  k-nearest neighbor (Week 5)
+2.  decision tree (Week 5)
+3.  bagged tree (Week 6)
+    -   bag_tree()
+    -   Use the "times =" argument when setting the engine during model specification to specify the number of trees. The rule of thumb is that 50-500 trees is usually sufficient. The bottom of that range should be sufficient here.
+4.  random forest (Week 6)
+    -   rand_forest()
+    -   m_try() is the new hyperparameter of interest for this type of model. Make sure to include it in your tuning process
+
+Go through the modeling process for each model:
+
+Preprocessing. You can use the same recipe for all the models you create.
+
+Resampling. Make sure to use appropriate resampling to select the best version created by each algorithm.
+
+Tuning. Find the best values for each hyperparameter (within a reasonable range).
+
+Compare the performance of the four final models you have created.
+
+Use appropriate performance evaluation metric(s) for this classification task. A table would be a good way to display your comparison. Use at least one visualization illustrating your model results.
+
+
+## Data Prep and Recipe
+```{r}
+##split the data
+spotify_split <- initial_split(combined_spotify_data)
+#training data
+spotify_train <- training(spotify_split)
+#testing data
+spotify_test <- testing(spotify_split)
+#create 5 folds
+cv_folds = vfold_cv(spotify_train, v = 5)
+
+
+
+
+
+#Specify Recipe
+#outcome, 0 = Annie, 1 = Carly
+outcome_rec <- recipe(outcome~ ., data = spotify_train) %>% 
+  #turn all nominal predictors into dummy vars
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% 
+  #normalize all numeric predictors
+  step_normalize(all_numeric_predictors())
+```
+
+
+## k Nearest neighbor
+
+### Initalize Model and Create Workflow
+```{r}
+#initialize knn model
+knn_model = nearest_neighbor(neighbors = tune()) %>% #set nearest neighbers model to tune neighbor parameter
+  set_engine("kknn") %>% #use kknn engine
+  set_mode("classification") #set classification as mode
+
+knn_workflow = workflow() %>% #create workflow
+  add_model(knn_model) %>% #add knn model
+  add_recipe(outcome_rec) #add recipe
+
+  
+```
+
+### Tune Model and Get Metrics
+```{r}
+knn_cv_tune = knn_workflow %>%
+     tune_grid(resamples = cv_folds, grid = 5) #use cross validation and sepcify 5 diffrent neighbor options
+
+ #get metrics from tuning cv to pick best model
+collect_metrics(knn_cv_tune)
+
+```
+
+### Plot tuning results
+```{r}
+autoplot(knn_cv_tune) + #plot cv results for parameter tuning
+  theme_bw()
+```
+
+
+### Finalize workflow with best model 
+
+```{r}
+#finalize workflow with best model
+final_wf <- knn_workflow %>% 
+  finalize_workflow(select_best(knn_cv_tune, metric = "accuracy")) 
+  
+
+```
+
+### Fit the model with the best # of neighbors
+```{r}
+# Fitting our final workflow
+final_fit <- final_wf %>%  fit(data = spotify_train)
+
+
+#predict with test data
+spotify_pred <- final_fit %>% 
+  predict(new_data = spotify_test) %>% 
+     bind_cols(spotify_test)
+  
+
+spotify_pred # gives prediction for each data point in test 
+
+
+
+# Write over 'final_fit' with this last_fit() approach
+final_fit <- final_wf %>% last_fit(spotify_split)
+# Collect metrics on the test data
+final_fit %>% collect_metrics()
+```
+### Get Accuracy Results
+```{r}
+#use accuracy function to get accuracy results based on ground truth
+accuracy_knn<- accuracy(spotify_pred, truth = outcome, estimate = .pred_class)
+
+```
+
+
+
+## Decision Tree
+
+### Initialize Model
+```{r}
+# initialize model with tuning parameters
+tree_spec_tune <- decision_tree(
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()
+) %>% 
+  set_engine("rpart") %>% #set engine to rapart
+  set_mode("classification") # set mode to classification
+
+#create tree grid with tuning parameteres and 5 levels
+tree_grid <- grid_regular(cost_complexity(), tree_depth(), min_n(), levels = 5)
+
+```
+
+
+### Create a decision tree workflow 
+```{r}
+#specify 10 fold cross validation
+tree_cv  <- spotify_train %>% 
+  vfold_cv(v = 10)
+
+
+#create worflow with recipe and tuning specs
+wf_tree_tune <- workflow() %>% 
+  add_recipe(outcome_rec) %>% 
+  add_model(tree_spec_tune)
+
+
+doParallel::registerDoParallel()  #build trees in parallel
+system.time(
+    tree_rs <- tune_grid(
+      wf_tree_tune,
+      resamples = tree_cv,
+      grid = tree_grid,
+      metrics = metric_set(accuracy)
+)
+)
+
+
+
+```
+
+### Visualize tuning parameter effects
+```{r}
+autoplot(tree_rs) # examine how different parameter configurations relate to accuracy 
+show_best(tree_rs) # show top models and performance estimates
+```
+
+### Select the best model 
+```{r}
+#select best tree
+final_tree <- finalize_workflow(wf_tree_tune, select_best(tree_rs))
+final_tree
+```
+
+### Fit the model
+```{r message=FALSE}
+
+#fit the model
+final_tree_fit <-  fit(final_tree, data = spotify_train)
+
+#last_fit() fit on the training data, but then also evaluates on the test data
+final_tree_result<- last_fit(final_tree, spotify_split)
+final_tree_result$.predictions #get predictions
+
+# predict outcome ( 0 = Annie, 1 = Carly)
+predict_data = as.data.frame(final_tree_result$.predictions) %>% 
+  bind_cols(spotify_test)
+```
+
+
+### Visualize Variable Importance
+```{r}
+#visualize variable importance with ggplot
+final_tree_fit %>%
+  vip(geom = "col", aesthetics = list(fill = "midnightblue", alpha = 0.8)) +
+  scale_y_continuous(expand = c(0,0))
+
+```
+
+### Accuracy Results
+```{r}
+#find accuracy of predictions based on ground truh 
+accuracy_dt<- accuracy(predict_data, truth = outcome...20, estimate = .pred_class)
+
+```
+
+## Bagged Tree
+
+### Initialize model and create a workflow
+```{r}
+#Model spec for bagged tree
+bt_spotify_model <-bag_tree() %>% 
+  set_engine("rpart", times = 50) %>% 
+  set_mode("classification")
+
+#Create a bagged tree workflow
+bt_workflow <- workflow() %>% 
+  add_recipe(outcome_rec) %>% 
+  add_model(bt_spotify_model)
+
+#initialize 5 fold cross validation
+folds <- vfold_cv(spotify_train, v = 5)
+```
+
+
+### Tune Model and get metrics
+```{r}
+#resample with cross validation and predefined workflow
+resampled_bt <- fit_resamples(
+  bt_workflow,
+  resamples = folds
+)
+
+ #get metrics from tuning cv to pick best model
+collect_metrics(resampled_bt)
+
+```
+
+
+### Fit Model and make predictions
+```{r}
+spotify_fit_bt <- bt_workflow %>% 
+  fit(data = spotify_train) # fit on training data
+
+
+spotify_predict_bt = predict(spotify_fit_bt, spotify_test) %>%  # make predictions
+   bind_cols(spotify_test)
+```
+
+
+### Accuracy Results
+```{r}
+#find accuracy for bagged tree predictions based on ground truth
+accuracy_bt<- accuracy(spotify_predict_bt, truth = outcome, estimate = .pred_class) 
+
+```
+
+
+
+## Random Forest
+
+### Initialize Model  and Create Workflow
+```{r}
+
+#initialize random forest model with tuning parameters
+rf_spotify_model <- rand_forest(mtry = tune(), trees = tune()) %>% 
+  set_engine("randomForest") %>%
+  set_mode("classification")
+
+#Creating the random forest workflow
+rf_spotify_workflow = workflow() %>% 
+  add_model(rf_spotify_model) %>% 
+  add_recipe(outcome_rec)
+```
+
+### Reasample/ Tune model and get metrics
+```{r message = FALSE}
+#resample with 5 fold cross validation
+fit_rf <-rf_spotify_workflow %>% 
+tune_grid(
+  resamples = cv_folds,
+  grid = 10) 
+
+#show results of tuning
+collect_metrics(fit_rf)
+
+```
+### Fit and Predict
+```{r}
+
+rf_best = rf_spotify_workflow %>%  #select best model for finalized workflow
+  finalize_workflow(select_best(fit_rf, metric = "accuracy"))
+
+#Fit the model to the training set
+spotify_fit_rf = fit(rf_best, spotify_train)
+
+#predict on testing data
+spotify_predict_rf = predict(spotify_fit_rf, spotify_test) %>% 
+  bind_cols(spotify_test)
+```
+
+
+### View Accuracy Results 
+```{r}
+#Getting accuracy of testing prediction
+accuracy_rf<- accuracy(spotify_predict_rf, truth = outcome, estimate = .pred_class)
+
+```
+## Select Best Model
+
+```{r}
+# add a column to each accuracy dataframe denoting which model is being used
+accuracy_knn$Method <- "kNN"
+accuracy_dt$Method <- "Decision Tree"
+accuracy_bt$Method <- "Bagged Tree"
+accuracy_rf$Method <- "Random Forest"
+
+#combine accuracy models
+accuracies <- rbind(accuracy_knn,accuracy_dt,accuracy_rf, accuracy_bt)
+
+#put accuracies df into a table
+ kable(accuracies, "html",
+       col.names = c("Metric", "Estimator", "Estimate", "Method")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+From the table above, we can see that the Bagged Tree method has the highest accuracy. This model correctly identifies songs suggested for the correct person 76% of the time. This accuracy is just slightly better than Decision Tree and Random Forest, but performs quite significantly better than K Nearest Neighbors. 

@@ -178,14 +178,11 @@ new_pumpkins %>%
 
 How do we make it more useful? To get charts to display useful data, you usually need to group the data somehow.
 
-**This is not a useful plot. What surprises me is that there seems to be two different groups of price points for pumpkins, one hovering around ~20, and one hovering around ~75. I was surprised that there is such a distinct difference between these two groups, but perhaps it is because one is for organic pumpkins versus non organic pumpkins.** 
-
+**This is not a useful plot. What surprises me is that there seems to be two different groups of price points for pumpkins, one hovering around \~20, and one hovering around \~75. I was surprised that there is such a distinct difference between these two groups, but perhaps it is because one is for organic pumpkins versus non organic pumpkins.**
 
 *Question 4:* Group the pumpkins into groups based on the month column and then find the mean price for each month. Plot the results with a bar plot.
 
 Hint: use dplyr::group_by() %\>% summarize()
-
-
 
 ```{r}
 # Find the average price of pumpkins per month then plot a bar chart
@@ -253,7 +250,7 @@ The processed data baked_pumpkins has all its predictors encoded confirming that
 
 *Question 5:* From looking at the baked_pumpkins tibble, how many total cities are represented in the data set?
 
-**There are 10 cities represented in the dataset.** 
+**There are 10 cities represented in the dataset.**
 
 baked_pumpkins is a data frame that we can perform computations on. For instance, let's try to find a good correlation between two variables to potentially build a good predictive model. We'll use the function cor() to do this.
 
@@ -429,6 +426,10 @@ Hmm. The model does not do good job of generalizing the relationship between a p
 
 *Question 8:* What issues do you see with fitting a linear regression to this data?
 
-**The main issue with fitting a linear regression to this data is that it over and underestimates for nearly all sizes of packages. Based on the graph, our data does not look linear, and therefore fitting a linear regression line to this data will not give us accurate predictions. It also seems as though package size 3 was in our training data, but not in our testing data at all.** 
+**The main issue with fitting a linear regression to this data is that it over and underestimates for nearly all sizes of packages. Based on the graph, our data does not look linear, and therefore fitting a linear regression line to this data will not give us accurate predictions. It also seems as though package size 3 was in our training data, but not in our testing data at all.**
 
 Congratulations, you just created a model that can help predict the price of a few varieties of pumpkins. But you can probably create a better model! To be continued next week...
+
+```{r}
+save(pumpkins_train, file = "pumpkin_train.RData")
+```

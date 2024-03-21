@@ -1,0 +1,282 @@
+---
+title: "Lab7"
+author: "Annie Adams"
+date: "2023-03-01"
+output: html_document
+---
+
+## Case Study: Eel Distribution Modeling
+
+This week's lab follows a project modeling the eel species Anguilla australis described by Elith et al. (2008). There are two data sets for this lab.  You'll use one for training and evaluating your model, and you'll use your model to make predictions predictions on the other.  Then you'll compare your model's performance to the model used by Elith et al.
+
+## Data
+
+Grab the training data sets (eel.model.data.csv, eel.eval.data.csv) from github here:
+https://github.com/MaRo406/eds-232-machine-learning/blob/main/data 
+
+```{r message = FALSE}
+set.seed(11)
+library("tidymodels")
+library("tidyverse")
+library("dplyr")
+eel_eval <- read_csv(file = "https://raw.githubusercontent.com/MaRo406/eds-232-machine-learning/main/data/eel.eval.data.csv") %>% rename(Angaus = Angaus_obs) %>% mutate(Angaus = as.factor(Angaus))
+eel_model <- read_csv(file = "https://raw.githubusercontent.com/MaRo406/eds-232-machine-learning/main/data/eel.model.data.csv")%>% 
+  mutate(Angaus = as.factor(Angaus)) %>%
+  select(-Site)
+```
+
+
+### Split and Resample
+
+Split the model data (eel.model.data.csv) into a training and test set, stratified by outcome score (Angaus). Use 10-fold CV to resample the training set.
+
+```{r}
+#split model data into train and test stratified by outcome score
+data_split = initial_split(eel_model, strata = Angaus)
+
+train = training(data_split)#get training data
+test = testing(data_split) #get testing data
+
+cv_folds = train %>% vfold_cv( v = 10, strata = Angaus) #10 fold cv to resample
+
+
+```
+
+
+### Preprocess
+
+Create a recipe to prepare your data for the XGBoost model
+
+```{r}
+eel_recipe = recipe(Angaus ~ ., data = train) %>% #create model recipe
+  step_dummy(all_nominal_predictors()) %>% #create dummy variables from all factors
+  step_normalize(all_numeric_predictors()) #normalize all numeric predictors
+```
+
+
+## Tuning XGBoost
+
+### Tune Learning Rate
+
+Following the XGBoost tuning strategy outlined in lecture, first we conduct tuning on just the learning rate parameter:
+
+1.  Create a model specification using {xgboost} for the estimation
+
+-   Only specify one parameter to tune()
+
+```{r}
+boost_model <- boost_tree(learn_rate = tune(), trees = 3000) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+
+boost_workflow = workflow() %>% 
+  add_model(boost_model) %>% 
+  add_recipe(eel_recipe)
+
+boost_workflow
+
+```
+
+
+2.  Set up a grid to tune your model by using a range of learning rate parameter values: expand.grid(learn_rate = seq(0.0001, 0.3, length.out = 30))
+-   Use appropriate metrics argument(s) - Computational efficiency becomes a factor as models get more complex and data get larger. Record the time it takes to run. Do this for each tuning phase you run.You could use {tictoc} or Sys.time().
+```{r}
+grid <- expand.grid(learn_rate = seq(0.0001, 0.3, length.out = 30))
+system.time(
+    boost_rs <- boost_workflow %>% tune_grid(
+      resamples = cv_folds,
+      grid = grid,
+      metrics = metric_set(accuracy, roc_auc, pr_auc))
+)
+
+```
+
+
+
+
+3.  Show the performance of the best models and the estimates for the learning rate parameter values associated with each.
+
+
+```{r}
+show_best(boost_rs, metric = "roc_auc")
+
+```
+
+
+### Tune Tree Parameters
+
+1.  Create a new specification where you set the learning rate (which you already optimized) and tune the tree parameters.
+
+```{r}
+boost_model_update <- boost_tree( learn_rate = select_best(boost_rs, metric = "roc_auc")$learn_rate, trees = 3000, min_n = tune(), tree_depth = tune(), loss_reduction = tune()) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+boost_update_workflow = workflow() %>% 
+  add_model(boost_model_update) %>% 
+  add_recipe(eel_recipe)
+```
+
+
+2.  Set up a tuning grid. This time use grid_latin_hypercube() to get a representative sampling of the parameter space
+```{r}
+grid2 <- grid_latin_hypercube( min_n(), tree_depth(), loss_reduction(), size = 50)
+system.time(
+    boost_rs_update <- tune_grid(
+      object = boost_update_workflow,
+      resamples = cv_folds,
+      grid = grid2,
+      metrics = metric_set(accuracy, roc_auc, pr_auc)
+)
+)
+```
+
+
+3.  Show the performance of the best models and the estimates for the tree parameter values associated with each.
+
+```{r}
+show_best(boost_rs_update, metric = "roc_auc")
+
+```
+
+### Tune Stochastic Parameters
+
+1.  Create a new specification where you set the learning rate and tree parameters (which you already optimized) and tune the stochastic parameters.
+
+```{r}
+boost_model_update2 <- boost_tree(
+  learn_rate = select_best(boost_rs, metric = "roc_auc")$learn_rate, 
+  trees = 3000,
+  min_n = select_best(boost_rs_update, metric = "roc_auc")$min_n,
+  tree_depth = select_best(boost_rs_update, metric = "roc_auc")$tree_depth, 
+  loss_reduction = select_best(boost_rs_update, metric = "roc_auc")$loss_reduction, 
+  stop_iter = tune(), mtry = tune(), sample_size = tune()) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+boost_update_workflow2 = workflow() %>% 
+  add_model(boost_model_update2) %>% 
+  add_recipe(eel_recipe)
+
+
+
+```
+
+
+2.  Set up a tuning grid. Use grid_latin_hypercube() again.
+
+```{r}
+
+
+grid3 <- grid_latin_hypercube( stop_iter(), sample_size = sample_prop(c(0.4,0.9)), finalize(mtry(), select(train, -Angaus)),
+  size = 50)
+system.time(
+    boost_rs_update2 <- tune_grid(
+      boost_update_workflow2,
+      resamples = cv_folds,
+      grid = grid3,
+      metrics = metric_set(accuracy, roc_auc, pr_auc)
+)
+)
+
+
+```
+
+3.  Show the performance of the best models and the estimates for the tree parameter values associated with each.
+
+```{r warning = FALSE}
+show_best(boost_rs_update2)
+```
+
+## Finalize workflow and make final prediction
+
+1.  How well did your model perform? What types of errors did it make?
+
+
+```{r}
+final_boost <- boost_tree(
+  learn_rate = select_best(boost_rs, metric = "roc_auc")$learn_rate, 
+  trees = 3000,
+  min_n = select_best(boost_rs_update, metric = "roc_auc")$min_n,
+  tree_depth = select_best(boost_rs_update, metric = "roc_auc")$tree_depth, 
+  loss_reduction = select_best(boost_rs_update, metric = "roc_auc")$loss_reduction, 
+  stop_iter = select_best(boost_rs_update2, metric = "roc_auc")$stop_iter, mtry = select_best(boost_rs_update2, metric = "roc_auc")$mtry, sample_size =select_best(boost_rs_update2, metric = "roc_auc")$sample_size) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+final_boost
+
+
+
+final_boost_update_workflow = workflow() %>% 
+  add_model(final_boost) %>% 
+  add_recipe(eel_recipe)
+
+
+final_fit <- last_fit(final_boost_update_workflow, data_split)
+
+collect_metrics(final_fit)
+
+preds <- final_fit$.predictions[[1]]
+confusion_matrix <- preds %>% conf_mat(truth=Angaus, estimate=.pred_class) 
+autoplot(confusion_matrix)
+
+accuracy_calculation <- confusion_matrix %>%
+  summary() %>%
+  filter(.metric == "accuracy")
+
+accuracy_value <- accuracy_calculation$.estimate
+
+accuracy_value
+
+```
+
+**My model performed pretty well, with an roc accuracy of .841. In the missclassification errors it did make, it largely labeled Angaus = 1 as Angaus = 0. There were very few false false positives in comparison to false negatives.**
+
+## Fit your model the evaluation data and compare performance
+
+1.  Now used your final model to predict on the other dataset (eval.data.csv)
+
+
+```{r}
+eval_fit<- fit(final_boost_update_workflow, eel_eval)
+eval_preds <- predict(eval_fit, eel_eval) %>% 
+  bind_cols(eel_eval$Angaus)
+```
+
+2.  How does your model perform on this data?
+
+```{r}
+confusion_matrix <- eval_preds %>% conf_mat(truth=...2, estimate=.pred_class) 
+autoplot(confusion_matrix)
+
+
+accuracy_calculation <- confusion_matrix %>%
+  summary() %>%
+  filter(.metric == "accuracy")
+
+accuracy_value_eval <- accuracy_calculation$.estimate
+
+accuracy_value_eval
+
+
+```
+**This model seems to predict a bit better than the last. Similarly to the previous model, there are far less false positives than false negatives. However, this time there are also far less false negatives than the previous model.This model achieved an accuracy of .956, which is better than an accuracy of .841.**
+
+3.  How do your results compare to those of Elith et al.?
+
+-   Use {vip} to compare variable importance
+-   What do your variable importance results tell you about the distribution of this eel species?
+
+```{r}
+eval_fit %>%
+  vip::vip(geom = "col") +
+  theme_bw()
+```
+
+
+
+
+The variable importance results I got were similar to those of Elith at all. The study in the paper found that SegSumT, USNative, Method, and DSDIST were the top four important variables. I also got that SegSumT, DSDist, and USNative were in the top four variables in terms of importance. The paper received a cross validation predictive performance score of .869. This is slightly better than the accuracy I received of .841. 
+
+The variable importance plot shows me that summer air temperature, average slop in upstream catchement,and distance to the coast all  effect the outcome on Angaus detection the most. 

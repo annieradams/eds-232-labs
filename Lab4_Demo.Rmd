@@ -1,0 +1,94 @@
+---
+title: "Lab4_Demo"
+author: "Mateo Robbins"
+date: "2024-01-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)     # for data wrangling
+library(ggplot2)   # for awesome plotting
+library(rsample)   # for data splitting
+library(recipes)   # data preprocessing
+library(caret)     # for logistic regression modeling
+```
+Let's explore how employee income and overtime hours worked affect likelihood of employee attrition.  Any predictions?
+
+```{r}
+#
+data("attrition", package = "modeldata")
+
+df <- attrition %>% mutate_if(is.ordered, factor, ordered = FALSE)
+
+# Create training (70%) and test (30%) sets for the 
+# rsample::attrition data.
+set.seed(123)  # for reproducibility 
+churn_split <- initial_split(attrition, prop = .70)
+churn_train <- training(churn_split)
+churn_test  <- testing(churn_split)
+```
+
+Let's set up set up our recipes now for preprocessing. 
+```{r recipe}
+#specify and prep recipe
+churn_rec <- recipe(Attrition ~., data = churn_train) %>% 
+  step_integer(Attrition, zero_based = T) %>% 
+  prep(churn_train)
+
+#bake recipe with training data
+churn_baked_train <- bake(churn_rec, new_data = churn_train)
+```
+
+```{r specify_models_glm}
+#MonthlyIncome
+model_inc <- glm(Attrition ~ MonthlyIncome, family = "binomial", data = churn_baked_train)
+  
+#OverTime
+model_time <- glm(Attrition ~ OverTime, family = "binomial", data = churn_baked_train)
+```
+
+
+```{r tidy_model_objs}
+broom::tidy(model_inc)
+broom::tidy(model_time)
+```
+
+
+
+```{r exp_coefs}
+#exponentiate the coefficients from model objects for interpretation. Gives us changes in odds of attrition
+exp(coef(model_inc))
+exp(coef(model_time))
+```
+
+for each dollar, odds of them leaving ( prob of them leaving / prob of not leaving) is incrementally decreasing. multiplity by .99 ( so its decreasing). odd of them leaving multipled by 3.5 times if they worked overtime. (change in the odds of the event occuring , multiplicateively) when an employee works overtime, the odds of them leaving are 3 times more likely. 
+
+```{r recode_attrition_test}
+churn_baked_test <-  bake(churn_rec, new_data = churn_test)
+```
+
+```{r plot_income_attrition}
+ggplot(churn_baked_test, aes(x = MonthlyIncome, y = Attrition))+
+  geom_point()+
+  stat_smooth(method = "glm", se = T, method.args  = list(family = "binomial"))
+```
+
+We can add more predictors, creating a multiple logistic regression model
+
+```{r mult_log_regression}
+
+model_both <- glm(
+  Attrition ~ MonthlyIncome + OverTime,
+  family = "binomial", 
+  data = churn_baked_train
+  )
+```
+
+
+```{r}
+ggplot(churn_baked_test, aes(x = MonthlyIncome, y = Attrition, color = OverTime))+
+  geom_point(alpha = .3)+
+  stat_smooth(method = "glm", se = F, method.args = list(family = "binomial "))
+```
+

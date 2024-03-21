@@ -1,0 +1,191 @@
+---
+title: "Lab 8"
+author: "Annie Adams"
+date: "2024-03-06"
+output: html_document
+---
+
+## Forest Cover Classification with SVM
+
+In this week's lab we are exploring the use of Support Vector Machines for multi-class classification. Specifically, you will be using cartographic variables to predict forest cover type (7 types).
+
+Natural resource managers responsible for developing ecosystem management strategies require basic descriptive information including inventory data like forest cover type for forested lands to support their decision-making processes. However, managers generally do not have this type of data for in-holdings or neighboring lands that are outside their immediate jurisdiction. One method of obtaining this information is through the use of predictive models.
+
+You task is build both an SVM and a random forest model and compare their performance on accuracy and computation time.
+
+1.  The data is available here: <https://ucsb.box.com/s/ai5ost029enlguqyyn04bnlfaqmp8kn4>
+
+
+```{r message=FALSE, warning = FALSE}
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+
+
+# read in data, 
+covtype <- read_csv(here::here("data", "covtype_sample.csv" )) %>% 
+  mutate(Cover_Type = as.factor(Cover_Type)) %>%  # make predictor var a factor
+  select(-contains('Soil_Type')) # remove soil_type columns for computational efficiency
+```
+
+Explore the data.
+
+-   What kinds of features are we working with?
+
+**The features we are working with are numeric and binary, though mostly binary. The features include the soil type, cover type, and information on topography.**
+
+-   Does anything stand out that will affect you modeling choices?
+
+**The fact that there are 50 different soil types that have a binary predictor for having each soil type or not stands out to me as something that could affect my modeling choices. Also, there are some cover types that are present in the data a lot more than others, leaving us with a skewed distribution of cover type.**
+
+Hint: Pay special attention to the distribution of the outcome variable across the classes.
+
+2.  Create the recipe and carry out any necessary preprocessing. Can you use the same recipe for both models?
+```{r  message=FALSE, warning = FALSE}
+
+data_split = initial_split(covtype, strata = Cover_Type) # split data
+
+train = training(data_split)#get training data
+test = testing(data_split) #get testing data
+
+
+
+
+cover_recipe = recipe(Cover_Type ~ ., data = train) %>% #create model recipe
+  step_zv(all_predictors()) %>% # zero variance
+  step_center(all_numeric_predictors()) %>%  # center to mean of 0
+  step_scale(all_numeric_predictors()) # scale to sd of 1 
+
+```
+We can use the same recipe for both models.
+
+3.  Create the folds for cross-validation.
+
+```{r  message=FALSE, warning = FALSE}
+cv_folds = train %>% vfold_cv( strata = Cover_Type, v = 10) #10 fold cv to resample
+
+```
+
+
+
+4.  Tune the models. Choose appropriate parameters and grids. If the computational costs of tuning given your strategy are prohibitive, how might you work around this?
+```{r svm,  message=FALSE, warning = FALSE}
+#Create linear SVM model specification
+svm_linear_spec <- svm_poly(degree = 1, cost = tune()) %>%  # poly model with 1 degree = linear
+  set_mode("classification") %>% 
+  set_engine("kernlab")
+
+
+
+#Bundle into workflow
+svm_workflow <- workflow() %>% 
+  add_model(svm_linear_spec %>% set_args(cost_tune())) %>%  
+  add_formula(Cover_Type ~ .)
+
+
+#Choose parameters and grids 
+
+grid <- grid_regular(cost(), levels = 5) #tune
+
+
+system.time(
+    svm_tuned <- tune_grid(
+      object = svm_workflow, 
+      resamples = cv_folds, #resample
+      grid = grid)
+)
+
+
+
+
+```
+
+
+
+
+
+
+```{r random_forest,  message=FALSE, warning = FALSE}
+rf_spec <- rand_forest(mtry = tune(), trees = tune()) %>% # create model specifications
+  set_mode("classification") %>%
+  set_engine("randomForest")
+
+
+#Creating the random forest workflow
+rf_cover_workflow = workflow() %>% 
+  add_model(rf_spec) %>% 
+  add_recipe(cover_recipe)
+
+#tune model
+system.time(
+tune_rf <-rf_cover_workflow %>% 
+tune_grid(
+  resamples = cv_folds,
+  grid = 10))
+
+
+
+
+```
+
+
+5.  Conduct final predictions for both models and compare their prediction performances and computation costs from part 4.
+
+```{r random forest metrics,  message=FALSE, warning = FALSE}
+
+#show results of tuning
+collect_metrics(tune_rf)
+
+
+best_rf <- show_best(tune_rf, n = 1, metric = "roc_auc") #show best random forest model
+
+final_rf <- finalize_workflow(rf_cover_workflow, # finalize workflow
+                              select_best(tune_rf, metric = "roc_auc")) # select best model
+
+
+train_fit_rf <- fit(final_rf, train) #fit the model to the training set
+
+
+
+test_predict_rf <- predict(train_fit_rf, test) %>% #predict on testing data
+  bind_cols(test)  #bind to testing data
+  
+
+final_fit <- final_rf %>% last_fit(data_split) # final fit 
+
+final_fit %>% collect_metrics()
+
+```
+
+
+
+
+```{r svm metrics,  message=FALSE, warning = FALSE}
+collect_metrics(svm_tuned)
+
+
+best_svm <- show_best(svm_tuned, n = 1, metric = "roc_auc") #show best svm model
+
+final_svm <- finalize_workflow(svm_workflow,
+                              select_best(svm_tuned, metric = "roc_auc"))
+
+
+train_fit_svm <- fit(final_svm, train) #fit the model to the training data
+
+
+
+test_predict_svm <- predict(train_fit_svm, test) %>% 
+  bind_cols(test)  #bind to testing data
+  
+
+final_fit <- final_svm %>% last_fit(data_split)
+
+final_fit %>% collect_metrics()
+
+```
+
+-   Which type of model do you think is better for this task?
+
+**I think the random forest model is better for this task. The random forest took significantly less time to run and also achieved better prediction accuracy by a significant amount.**
+-   Why do you speculate this is the case?
+**I think random forest performs better because this data has many different levels to it, which a random forest is able to classify. SVM, on the other hand, is meant to classify two classes.**
